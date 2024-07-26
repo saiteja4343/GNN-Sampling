@@ -3,7 +3,10 @@ import dgl
 import torch
 import numpy as np
 from ogb.nodeproppred import DglNodePropPredDataset
-from dgl.data import CoraFullDataset, AsNodePredDataset
+from dgl.data import AsNodePredDataset
+
+from dgl.data import CoraFullDataset, PubmedGraphDataset, CoraGraphDataset, FlickrDataset
+from dgl.data import CoauthorPhysicsDataset, YelpDataset, AmazonCoBuyComputerDataset
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.nn.pytorch import SAGEConv
@@ -48,35 +51,55 @@ def test(model, device, data_loader):
 
     return accuracy
 
+datasets = ['ogbn-arxiv', 'pubmed', 'cora', 'flickr', 'coauthor-physics', 'yelp', 'amazon_comp', 'cora_full']
 
-#dataset = DglNodePropPredDataset('ogbn-arxiv')
-dataset = CoraFullDataset()
-#dataset = FlickrDataset()
-dataset = AsNodePredDataset(dataset, split_ratio=[0.8, 0.1, 0.1])
+dataset_map = {
+        'ogbn-arxiv': lambda: DglNodePropPredDataset('ogbn-arxiv'),
+        'pubmed': PubmedGraphDataset(),
+        'cora': CoraGraphDataset(),
+        'flickr': FlickrDataset(),
+        'coauthor-physics': CoauthorPhysicsDataset(),
+        'yelp': YelpDataset(),
+        'amazon_comp': AmazonCoBuyComputerDataset(),
+        'cora_full': CoraFullDataset()
+    }
+
+i = 0 # Change this to the index of the dataset you want to use
+
+dataset = dataset_map[datasets[i]]
+
+if datasets[i] !=  'ogbn-arxiv':
+    dataset = AsNodePredDataset(dataset,  split_ratio=[0.8, 0.1, 0.1])
+    graph = dataset[0]
+    if datasets[i] == 'cora' or datasets[i] == 'flickr' or datasets[i] == 'pubmed' :
+        graph = dgl.add_reverse_edges(graph)
+    node_labels = graph.ndata['label']
+    print(graph)
+    print(node_labels)
+    train_nids = dataset.train_idx
+    valid_nids = dataset.val_idx
+    test_nids = dataset.test_idx
+else:
+    graph, node_labels = dataset[0]
+    # Add reverse edges since the dataset is unidirectional.
+    graph = dgl.add_reverse_edges(graph)
+    graph.ndata['label'] = node_labels[:, 0]
+    print(graph)
+    print(node_labels)
+    idx_split = dataset.get_idx_split()
+    train_nids = idx_split['train']
+    valid_nids = idx_split['valid']
+    test_nids = idx_split['test']
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # change to 'cuda' for GPU
 
 print(dataset)
-#graph, node_labels = dataset[0]
-graph = dataset[0]
-# Add reverse edges since the dataset is unidirectional.
-#graph = dgl.add_reverse_edges(graph)
-#graph.ndata['label'] = node_labels[:, 0]
-node_labels = graph.ndata['label']
-print(graph)
-print(node_labels)
 
 node_features = graph.ndata['feat']
 num_features = node_features.shape[1]
 num_classes = (node_labels.max() + 1).item()
 print('Number of classes:', num_classes)
 
-#idx_split = dataset.get_idx_split()
-#train_nids = idx_split['train']
-#valid_nids = idx_split['valid']
-#test_nids = idx_split['test']
-train_nids = dataset.train_idx
-valid_nids = dataset.val_idx
-test_nids = dataset.test_idx
+
 
 name = dataset.name
 
@@ -169,14 +192,21 @@ for learning_rate in lr_list:
                             inputs = mfgs[0].srcdata['feat']
                             labels.append(mfgs[-1].dstdata['label'].cpu().numpy())
 
-                            outputs = model(mfgs, inputs)
-                            loss = F.cross_entropy(outputs, mfgs[-1].dstdata['label'])
-                            valid_loss += loss.item()
-                            count_v += 1
-                            predictions.append(outputs.argmax(1).cpu().numpy())
+                            if datasets[i] == 'yelp':
+                                predictions.append(model(mfgs, inputs).argmax(1).cpu().numpy())
+                            else:
+                                outputs = model(mfgs, inputs)
+                                loss = F.cross_entropy(outputs, mfgs[-1].dstdata['label'])
+                                valid_loss += loss.item()
+                                count_v += 1
+                                predictions.append(outputs.argmax(1).cpu().numpy())
+
+
 
                         predictions = np.concatenate(predictions)
                         labels = np.concatenate(labels)
+                        if datasets[i] == 'yelp':
+                            labels = np.argmax(labels, axis=1)
                         valid_accuracy = accuracy_score(labels, predictions)
 
                         valid_loss /= count_v
